@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup, Tag
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import datetime
+import pandas as pd
 import re
 import requests
 from requests.cookies import RequestsCookieJar
@@ -9,10 +10,23 @@ import time
 # Constants
 URL = 'https://web.pcc.gov.tw/prkms/tender/common/bulletion/readBulletion'
 HANDSHAKE_GET = {'querySentence': '台灣電力', 'tenderStatusType': '招標', 'tenderStatusType': '決標', 'sortCol': 'TENDER_NOTICE_DATE', 'timeRange': '88', 'pageSize': '100'}
-HEADER = {'Origin': 'https://web.pcc.gov.tw',
+HEADER = {'Accept': 'text/html;charset=UTF-8',
+          'Accept-Encoding': 'gzip, deflate, br, zstd',
+          'Accept-Language': 'en-US',
+          'Cache-Control': 'no-cache',
+          'Origin': 'https://web.pcc.gov.tw',
+          'Pragma': 'no-cache',
           'Referer': 'https://web.pcc.gov.tw/prkms/tender/common/bulletion/readBulletion',
+          'Sec-Ch-Ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"Windows"',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'same-origin',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'}
-SPACING = 0.5
+SPACING = 2
 
 @dataclass
 class PageParam:
@@ -55,29 +69,106 @@ def get_page_param(s: requests.Session, q: str, year: int) -> PageParam:
     else:
         return PageParam(None, 1, s.cookies)
 
-def get_records(q: str) -> list[Record]:
-    years = range(88, datetime.datetime.now().year - 1910) # Minguo 88 -> Minguo (current year)
+def get_records(s: requests.Session, q: str, **kwargs) -> list[Record]:
+    log_level: str = 'info'
+    minguo: bool = True
+    sp: float = SPACING
+    time_start: int = 88 # CE 1999
+    time_end: int = datetime.datetime.now().year - 1911 # CE 20xx
+
+    if 'level' in kwargs.keys():
+        level = kwargs.get('level')
+        if (level is None):
+            pass
+        elif (isinstance(level, str)):
+            if level in ['none', 'info', 'verbose']:
+                log_level = level
+
+    if 'minguo' in kwargs.keys():
+        minguo_input = kwargs.get('minguo')
+        if (minguo_input is None):
+            pass
+        elif (isinstance(minguo_input, bool)):
+            minguo = minguo_input
+
+    if 'range' in kwargs.keys():
+        time_range = kwargs.get('range')
+        if (time_range is None):
+            pass
+        elif (not isinstance(time_range, tuple)):
+            pass
+        elif (not len(time_range) == 2):
+            pass
+        else:
+            if isinstance(time_range[0], int):
+                time_start = time_range[0]
+                if (not minguo):
+                    time_start -= 1911
+            if isinstance(time_range[1], int):
+                time_end = time_range[1]
+                if (not minguo):
+                    time_end -= 1911
+
+    if 'spacing' in kwargs.keys():
+        spacing = kwargs.get('spacing')
+        if (spacing is None):
+            pass
+        elif (isinstance(spacing, float) | isinstance(spacing, int)):
+            sp = float(spacing)
+    
+    if (log_level == 'verbose'):
+        print(f'Input params:\n\tlevel = \'{log_level}\'\n\tminguo = {minguo}\n\trange = ({time_start}, {time_end})\n\tspacing = {sp}')
+
+    failed = False
+    years = range(time_start, time_end + 1)
     records = list()
 
     for year in years:
-        session = requests.Session()
-        param = get_page_param(session, q, year)
-        print(f'Year: {year + 1911}, Page Count: {param.count}')
-        time.sleep(SPACING)
+        param = get_page_param(s, q, year)
+        if (log_level != 'none'):
+            print(f'Year: {year + 1911}, Page Count: {param.count}')
+        time.sleep(sp)
 
         for page in range(1, param.count + 1):
-            sub_raw = session.post(param.get_page_url(q, year, page), headers=HEADER)
+            sub_raw = s.post(param.get_page_url(q, year, page), headers=HEADER)
             sub_bs = BeautifulSoup(sub_raw.text, 'html.parser')
             try:
+                if (log_level == 'verbose'):
+                    print(f'Searching at: Y{year + 1911} | P{page}')
                 get_records_from_bulletin(sub_bs, records)
             except:
-                print(sub_raw.request.headers)
-                print(sub_raw.headers)
-                pass
-            time.sleep(SPACING)
-            del sub_bs
+                if (log_level != 'none'):
+                    print(f'Failed at: Y{year + 1911} | P{page}')
+                break
+            time.sleep(sp)
+        
+        if (failed):
+            break
 
     return records
+
+def get_records_as_dataframe(q: str, **kwargs) -> pd.DataFrame:
+    '''
+    Retrieve the tender records as a pandas dataframe.
+
+    Parameter
+    -------
+    q: str
+        The query string.
+    minguo: bool, default True
+        Whether to treat the number in `range` as a minguo year.
+    range: tuple[int, int], default tuple[88, current year]
+        The time period to search from.
+    spcaing: float, default 2
+        The request interval in seconds.
+    '''
+    # Make sure the public tender website is accessible.
+    s = requests.Session()
+    handshake(s)
+
+    # Get tender records.
+    records = get_records(s, q, **kwargs)
+    return pd.DataFrame([asdict(r) for r in records])
 
 def get_records_from_bulletin(bs: BeautifulSoup, records: list[Record]) -> None:
     bulletin = bs.select_one('#bulletion > tbody')
@@ -92,6 +183,10 @@ def get_records_from_bulletin(bs: BeautifulSoup, records: list[Record]) -> None:
             return
 
         record = Record()
+        category = row.select_one(':nth-child(2)')
+        assert isinstance(category, Tag)
+        is_award = '決標公告' in category.get_text(strip=True)
+
         auth = row.select_one(':nth-child(3)')
         assert isinstance(auth, Tag)
         record.authority = auth.get_text(strip=True)
@@ -113,10 +208,18 @@ def get_records_from_bulletin(bs: BeautifulSoup, records: list[Record]) -> None:
         else:
             record.url = ''
         
-        date = row.select_one(':nth-child(5)')
-        assert isinstance(date, Tag)
-        date_texts = date.get_text(strip=True).split('/')
-        if (len(date_texts)) == 3:
+        date_texts: list[str] = list()
+        if (is_award):
+            date = row.select_one(':nth-child(6)')
+            assert isinstance(date, Tag)
+            date_text = date.find(text=True, recursive=False)
+            assert isinstance(date_text, str)
+            date_texts = date_text.split('/')
+        else:
+            date = row.select_one(':nth-child(5)')
+            assert isinstance(date, Tag)
+            date_texts = date.get_text(strip=True).split('/')
+        if (len(date_texts) == 3):
             date_components = [int(x) for x in date_texts]
             date_components[0] += 1911
             record.date = datetime.datetime(date_components[0], date_components[1], date_components[2])
@@ -126,8 +229,8 @@ def get_records_from_bulletin(bs: BeautifulSoup, records: list[Record]) -> None:
         records.append(record)
 
 # Handshake
-def handshake() -> None:
-    raw = requests.get(URL, params=HANDSHAKE_GET, headers=HEADER)
+def handshake(s: requests.Session) -> None:
+    raw = s.get(URL, params=HANDSHAKE_GET, headers=HEADER)
     bs = BeautifulSoup(raw.text, 'html.parser')
 
     # Test 1: Does the target website exist?
