@@ -16,6 +16,7 @@ Python 環境內需安裝：
 * [Python](https://www.python.org/downloads/) - *3.11+*
 * [Beautiful Soup](https://pypi.org/project/beautifulsoup4/)
 * [Pandas](https://pypi.org/project/pandas/)
+* [Requests](https://pypi.org/project/requests/)
 
 ```shell
 # 基本語法

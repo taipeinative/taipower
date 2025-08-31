@@ -47,8 +47,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--outdir', '-o',
         type=str,
-        default='../data',
-        help='Output directory for CSV files. (default: ../data)'
+        default='./data',
+        help='Output directory for CSV files. (default: ./data)'
     )
     args = parser.parse_args()
     time_range = tuple(args.time_range) if args.time_range else None
