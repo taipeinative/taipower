@@ -72,6 +72,8 @@ def get_page_param(s: requests.Session, q: str, year: int) -> PageParam:
 def get_records(s: requests.Session, q: str, **kwargs) -> list[Record]:
     log_level: str = 'info'
     minguo: bool = True
+    page_start: int = 0
+    page_end: int = 0
     sp: float = SPACING
     time_start: int = 88 # CE 1999
     time_end: int = datetime.datetime.now().year - 1911 # CE 20xx
@@ -90,6 +92,18 @@ def get_records(s: requests.Session, q: str, **kwargs) -> list[Record]:
             pass
         elif (isinstance(minguo_input, bool)):
             minguo = minguo_input
+
+    if 'page' in kwargs.keys():
+        page_range = kwargs.get('page')
+        if (not isinstance(page_range, tuple)):
+            pass
+        elif (not len(page_range) == 2):
+            pass
+        else:
+            if (isinstance(page_range[0], int) & (page_range[0] > 0)):
+                page_start = page_range[0]
+            if (isinstance(page_range[1], int) & (page_range[1] > 0)):
+                page_end = page_range[1]
 
     if 'range' in kwargs.keys():
         time_range = kwargs.get('range')
@@ -117,7 +131,9 @@ def get_records(s: requests.Session, q: str, **kwargs) -> list[Record]:
             sp = float(spacing)
     
     if (log_level == 'verbose'):
-        print(f'Input params:\n\tlevel = \'{log_level}\'\n\tminguo = {minguo}\n\trange = ({time_start}, {time_end})\n\tspacing = {sp}')
+        page_start_text = str(page_start) if (page_start > 0) else 'Start'
+        page_end_text = str(page_end) if (page_end > 0) else 'End'
+        print(f'Input params:\n\tlevel = \'{log_level}\'\n\tminguo = {minguo}\n\tpage = ({page_start_text}, {page_end_text})\n\trange = ({time_start}, {time_end})\n\tspacing = {sp}')
 
     failed = False
     years = range(time_start, time_end + 1)
@@ -125,11 +141,13 @@ def get_records(s: requests.Session, q: str, **kwargs) -> list[Record]:
 
     for year in years:
         param = get_page_param(s, q, year)
+        page_start_at_year = (page_start if (page_start <= param.count) else 1) if (page_start > 0) else 1
+        page_end_at_year = (page_end if (page_end <= param.count) else param.count) if (page_end > 0) else param.count
         if (log_level != 'none'):
             print(f'Year: {year + 1911}, Page Count: {param.count}')
         time.sleep(sp)
 
-        for page in range(1, param.count + 1):
+        for page in range(page_start_at_year, page_end_at_year + 1):
             sub_raw = s.post(param.get_page_url(q, year, page), headers=HEADER)
             sub_bs = BeautifulSoup(sub_raw.text, 'html.parser')
             try:
